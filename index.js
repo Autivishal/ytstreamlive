@@ -1,20 +1,39 @@
 require("dotenv").config();
 
 const express = require("express");
+const path = require("path");
 const ffmpegPath = require("ffmpeg-static");
 const { spawn } = require("child_process");
 
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
-const API_TOKEN = process.env.API_TOKEN;
+// Helper function to get clean, trimmed expected API Token
+function getExpectedToken() {
+    return (process.env.API_TOKEN || "").trim();
+}
 
 let ffmpegProcess = null;
+let streamStartTime = null;
 
 app.post("/start-stream", (req, res) => {
     const { token, videoUrl, streamKey } = req.body;
+    const expectedToken = getExpectedToken();
+    const receivedToken = (token || "").trim();
 
-    if (token !== API_TOKEN) {
+    console.log(`[${new Date().toISOString()}] POST /start-stream received.`);
+
+    if (!expectedToken) {
+        console.error("ERROR: API_TOKEN is not configured in server environment (.env).");
+        return res.status(500).json({
+            success: false,
+            message: "Server configuration error: API_TOKEN is not set in environment."
+        });
+    }
+
+    if (receivedToken !== expectedToken) {
+        console.warn(`[AUTH FAILED] Received token length: ${receivedToken.length}, Expected token length: ${expectedToken.length}`);
         return res.status(401).json({
             success: false,
             message: "Invalid token"
@@ -22,11 +41,15 @@ app.post("/start-stream", (req, res) => {
     }
 
     if (ffmpegProcess) {
+        console.warn("[START STREAM] Request rejected: Stream already running.");
         return res.status(400).json({
             success: false,
             message: "Stream already running"
         });
     }
+
+    console.log(`[START STREAM] Starting FFmpeg process for video: ${videoUrl}`);
+    streamStartTime = Date.now();
 
     ffmpegProcess = spawn(ffmpegPath, [
         "-re",
@@ -40,22 +63,25 @@ app.post("/start-stream", (req, res) => {
     ]);
 
     ffmpegProcess.stderr.on("data", data => {
-        console.log(data.toString());
+        console.log(`[FFmpeg STDERR] ${data.toString().trim()}`);
     });
 
     ffmpegProcess.on("error", err => {
-        console.error("FFmpeg error:", err);
+        console.error("[FFmpeg ERROR]", err);
     });
 
     ffmpegProcess.on("close", code => {
-        console.log(`FFmpeg exited: ${code}`);
+        console.log(`[FFmpeg EXIT] Process exited with code ${code}`);
         ffmpegProcess = null;
+        streamStartTime = null;
     });
 
     setTimeout(() => {
         if (ffmpegProcess) {
+            console.log("[FFmpeg TIMEOUT] 24-hour stream limit reached. Stopping stream.");
             ffmpegProcess.kill("SIGTERM");
             ffmpegProcess = null;
+            streamStartTime = null;
         }
     }, 24 * 60 * 60 * 1000);
 
@@ -67,8 +93,13 @@ app.post("/start-stream", (req, res) => {
 
 app.post("/stop-stream", (req, res) => {
     const { token } = req.body;
+    const expectedToken = getExpectedToken();
+    const receivedToken = (token || "").trim();
 
-    if (token !== API_TOKEN) {
+    console.log(`[${new Date().toISOString()}] POST /stop-stream received.`);
+
+    if (receivedToken !== expectedToken) {
+        console.warn(`[AUTH FAILED] Stop stream rejected: Invalid token.`);
         return res.status(401).json({
             success: false,
             message: "Invalid token"
@@ -76,8 +107,12 @@ app.post("/stop-stream", (req, res) => {
     }
 
     if (ffmpegProcess) {
+        console.log("[STOP STREAM] Terminating FFmpeg process via SIGTERM.");
         ffmpegProcess.kill("SIGTERM");
         ffmpegProcess = null;
+        streamStartTime = null;
+    } else {
+        console.log("[STOP STREAM] No active stream running.");
     }
 
     res.json({
@@ -87,8 +122,10 @@ app.post("/stop-stream", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
+    const uptimeSeconds = streamStartTime ? Math.floor((Date.now() - streamStartTime) / 1000) : 0;
     res.json({
-        running: !!ffmpegProcess
+        running: !!ffmpegProcess,
+        uptime: uptimeSeconds
     });
 });
 
@@ -122,5 +159,12 @@ app.get("/ffmpeg-check", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-    console.log(`Server started on port ${process.env.PORT || 3000}`);
+    const port = process.env.PORT || 3000;
+    const token = getExpectedToken();
+    console.log(`Server started on port ${port}`);
+    if (token) {
+        console.log(`[CONFIG] API_TOKEN loaded (Length: ${token.length} chars)`);
+    } else {
+        console.warn(`[CONFIG WARNING] API_TOKEN is missing or empty in environment!`);
+    }
 });
