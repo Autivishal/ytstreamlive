@@ -52,7 +52,9 @@ async function resolveStreamableUrl(videoUrl) {
                 Bucket: bucketName,
                 Key: s3Key
             }), { expiresIn: 86400 });
-            return signedUrl;
+            // Clean query parameters that cause FFmpeg Linux GnuTLS header parsing crashes
+            const cleanUrl = signedUrl.replace(/&x-amz-checksum-mode=[^&]*/g, '').replace(/&x-id=[^&]*/g, '');
+            return cleanUrl;
         } catch (err) {
             console.error("[AWS S3 PRESIGNED ERROR]", err.message);
         }
@@ -111,6 +113,7 @@ function spawnFFmpegLoop() {
     console.log(`[FFmpeg ENGINE] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
 
     ffmpegProcess = spawn(ffmpegPath, [
+        "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "-re",
         "-i", resolvedUrl,
         "-c:v", "libx264",
