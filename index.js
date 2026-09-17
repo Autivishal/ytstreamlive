@@ -7,12 +7,59 @@ const os = require("os");
 const ffmpegPath = require("ffmpeg-static");
 const { spawn } = require("child_process");
 const multer = require("multer");
-const { S3Client } = require("@aws-sdk/client-s3");
+const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { Upload } = require("@aws-sdk/lib-storage");
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+// Helper function to resolve S3 URLs into 24-hour Presigned GET URLs for FFmpeg access
+async function resolveStreamableUrl(videoUrl) {
+    if (!videoUrl) return videoUrl;
+
+    const bucketName = process.env.AWS_BUCKET_NAME;
+    const s3Client = getS3Client();
+    if (!s3Client || !bucketName) return videoUrl;
+
+    let s3Key = null;
+    const trimmedUrl = String(videoUrl).trim();
+
+    if (trimmedUrl.includes("s3.amazonaws.com") || trimmedUrl.includes(".s3.")) {
+        if (!trimmedUrl.includes("X-Amz-Signature")) {
+            try {
+                const parsed = new URL(trimmedUrl);
+                let keyPath = decodeURIComponent(parsed.pathname);
+                if (keyPath.startsWith(`/${bucketName}/`)) {
+                    keyPath = keyPath.substring(bucketName.length + 2);
+                } else if (keyPath.startsWith("/")) {
+                    keyPath = keyPath.substring(1);
+                }
+                s3Key = keyPath;
+            } catch (e) {
+                console.warn("[S3 URL PARSE WARN]", e.message);
+            }
+        } else {
+            return trimmedUrl; // Already presigned
+        }
+    }
+
+    if (s3Key) {
+        try {
+            console.log(`[AWS S3 PRESIGNED] Generating 24-hour signed URL for FFmpeg to access private key: ${s3Key}`);
+            const signedUrl = await getSignedUrl(s3Client, new GetObjectCommand({
+                Bucket: bucketName,
+                Key: s3Key
+            }), { expiresIn: 86400 });
+            return signedUrl;
+        } catch (err) {
+            console.error("[AWS S3 PRESIGNED ERROR]", err.message);
+        }
+    }
+
+    return videoUrl;
+}
 
 // Multer disk storage configuration supporting up to 5 GB files without OOM issues
 const storage = multer.diskStorage({
@@ -230,7 +277,7 @@ app.post("/upload-s3", (req, res, next) => {
     }
 });
 
-app.post("/start-stream", (req, res) => {
+app.post("/start-stream", async (req, res) => {
     const { token, videoUrl, streamKey } = req.body;
     const expectedToken = getExpectedToken();
     const receivedToken = (token || "").trim();
@@ -261,13 +308,14 @@ app.post("/start-stream", (req, res) => {
         });
     }
 
-    console.log(`[START STREAM] Starting FFmpeg process for video: ${videoUrl}`);
+    const resolvedUrl = await resolveStreamableUrl(videoUrl);
+    console.log(`[START STREAM] Starting FFmpeg process for video: ${resolvedUrl}`);
     streamStartTime = Date.now();
 
     ffmpegProcess = spawn(ffmpegPath, [
         "-re",
         "-stream_loop", "-1",
-        "-i", videoUrl,
+        "-i", resolvedUrl,
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-c:a", "aac",
