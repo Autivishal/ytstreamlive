@@ -63,6 +63,92 @@ async function resolveStreamableUrl(videoUrl) {
     return videoUrl;
 }
 
+// Helper to download or stream S3 / HTTP video to local disk cache for 100% reliable FFmpeg streaming
+async function prepareLocalVideoFile(videoUrl) {
+    if (!videoUrl) return videoUrl;
+
+    const trimmedUrl = String(videoUrl).trim();
+    if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+        return trimmedUrl; // Already a local file path
+    }
+
+    const localCachePath = path.join(os.tmpdir(), "stream_input_video.mp4");
+    console.log(`[VIDEO STREAM CACHE] Preparing local stream input file: ${localCachePath}...`);
+
+    const bucketName = process.env.AWS_BUCKET_NAME;
+    const s3Client = getS3Client();
+
+    let s3Key = null;
+    if (s3Client && bucketName && (trimmedUrl.includes("s3.amazonaws.com") || trimmedUrl.includes(".s3."))) {
+        try {
+            const parsed = new URL(trimmedUrl);
+            let keyPath = decodeURIComponent(parsed.pathname);
+            if (keyPath.startsWith(`/${bucketName}/`)) {
+                keyPath = keyPath.substring(bucketName.length + 2);
+            } else if (keyPath.startsWith("/")) {
+                keyPath = keyPath.substring(1);
+            }
+            s3Key = keyPath;
+        } catch (e) {}
+    }
+
+    if (s3Key && s3Client && bucketName) {
+        try {
+            console.log(`[S3 CACHE DOWNLOAD] Fetching object '${s3Key}' directly via AWS S3 SDK to local disk...`);
+            const command = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
+            const s3Response = await s3Client.send(command);
+            const writeStream = fs.createWriteStream(localCachePath);
+
+            await new Promise((resolve, reject) => {
+                s3Response.Body.pipe(writeStream);
+                s3Response.Body.on("error", reject);
+                writeStream.on("finish", resolve);
+                writeStream.on("error", reject);
+            });
+
+            const sizeMB = (fs.statSync(localCachePath).size / (1024 * 1024)).toFixed(2);
+            console.log(`[S3 CACHE DOWNLOAD SUCCESS] Saved S3 video to local disk (${sizeMB} MB).`);
+            return localCachePath;
+        } catch (s3DownloadErr) {
+            console.warn(`[S3 CACHE DOWNLOAD WARN] Direct S3 download failed (${s3DownloadErr.message}). Falling back to HTTP URL stream...`);
+        }
+    }
+
+    // Generic HTTP/HTTPS download fallback
+    try {
+        const presignedUrl = await resolveStreamableUrl(trimmedUrl);
+        const httpModule = presignedUrl.startsWith("https") ? require("https") : require("http");
+
+        await new Promise((resolve, reject) => {
+            const fileStream = fs.createWriteStream(localCachePath);
+            const request = httpModule.get(presignedUrl, (response) => {
+                if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                    const redirModule = response.headers.location.startsWith("https") ? require("https") : require("http");
+                    redirModule.get(response.headers.location, (redirRes) => {
+                        redirRes.pipe(fileStream);
+                        fileStream.on("finish", resolve);
+                        fileStream.on("error", reject);
+                    }).on("error", reject);
+                } else if (response.statusCode === 200) {
+                    response.pipe(fileStream);
+                    fileStream.on("finish", resolve);
+                    fileStream.on("error", reject);
+                } else {
+                    reject(new Error(`HTTP Download failed with status ${response.statusCode}`));
+                }
+            });
+            request.on("error", reject);
+        });
+
+        const sizeMB = (fs.statSync(localCachePath).size / (1024 * 1024)).toFixed(2);
+        console.log(`[HTTP CACHE DOWNLOAD SUCCESS] Saved video to local disk (${sizeMB} MB).`);
+        return localCachePath;
+    } catch (httpErr) {
+        console.error(`[VIDEO CACHE ERROR] Download failed: ${httpErr.message}. Passing original URL to FFmpeg...`);
+        return await resolveStreamableUrl(trimmedUrl);
+    }
+}
+
 // Multer disk storage configuration supporting up to 5 GB files without OOM issues
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -113,8 +199,8 @@ function spawnFFmpegLoop() {
     console.log(`[FFmpeg ENGINE] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
 
     ffmpegProcess = spawn(ffmpegPath, [
-        "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "-re",
+        "-stream_loop", "-1",
         "-i", resolvedUrl,
         "-c:v", "libx264",
         "-preset", "veryfast",
@@ -377,7 +463,7 @@ app.post("/start-stream", async (req, res) => {
         });
     }
 
-    const resolvedUrl = await resolveStreamableUrl(videoUrl);
+    const resolvedUrl = await prepareLocalVideoFile(videoUrl);
     const maskedKey = streamKey.length > 8 ? streamKey.substring(0, 4) + "..." + streamKey.substring(streamKey.length - 4) : "****";
 
     isStreamActive = true;
