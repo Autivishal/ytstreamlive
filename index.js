@@ -677,6 +677,49 @@ app.use((err, req, res, next) => {
     });
 });
 
+app.get("/heartbeat", (req, res) => {
+    res.json({
+        status: "alive",
+        timestamp: new Date().toISOString(),
+        activeStreams: activeStreams.size
+    });
+});
+
+// 14-minute Heartbeat service to prevent Render Free Tier from going to sleep after 15 min of inactivity
+function startHeartbeat() {
+    const FOURTEEN_MINUTES_MS = 14 * 60 * 1000;
+
+    // First heartbeat after 1 minute, then every 14 minutes continuously
+    setTimeout(() => {
+        sendHeartbeat();
+        setInterval(sendHeartbeat, FOURTEEN_MINUTES_MS);
+    }, 60 * 1000);
+
+    function sendHeartbeat() {
+        const port = process.env.PORT || 3000;
+        const renderUrl = process.env.RENDER_EXTERNAL_URL || "https://ytstreamlive-cqvf.onrender.com";
+        const targetUrls = [
+            `http://localhost:${port}/heartbeat`,
+            `${renderUrl.replace(/\/$/, "")}/heartbeat`
+        ];
+
+        targetUrls.forEach(targetUrl => {
+            try {
+                const httpModule = targetUrl.startsWith("https") ? require("https") : require("http");
+                httpModule.get(targetUrl, (res) => {
+                    console.log(`[HEARTBEAT SUCCESS] (${new Date().toISOString()}) Pinged ${targetUrl} (HTTP ${res.statusCode})`);
+                }).on("error", (err) => {
+                    console.warn(`[HEARTBEAT WARN] Heartbeat ping to ${targetUrl} failed: ${err.message}`);
+                });
+            } catch (e) {
+                console.warn(`[HEARTBEAT ERROR] Exception: ${e.message}`);
+            }
+        });
+    }
+
+    console.log("[HEARTBEAT ENGINE] Initialized 14-minute server heartbeat service for Render Free Tier.");
+}
+
 app.listen(process.env.PORT || 3000, () => {
     const port = process.env.PORT || 3000;
     const token = getExpectedToken();
@@ -686,4 +729,7 @@ app.listen(process.env.PORT || 3000, () => {
     } else {
         console.warn(`[CONFIG WARNING] API_TOKEN is missing or empty in environment!`);
     }
+
+    // Start 14-minute Heartbeat service
+    startHeartbeat();
 });
