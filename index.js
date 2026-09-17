@@ -242,7 +242,12 @@ function spawnStreamLoop(streamId) {
         "-re",
         "-stream_loop", "-1",
         "-i", stream.resolvedUrl,
-        "-c", "copy",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-g", "60",
+        "-keyint_min", "60",
+        "-sc_threshold", "0",
+        "-c:a", "copy",
         "-f", "flv",
         stream.rtmpTargetUrl || `rtmp://a.rtmp.youtube.com/live2/${stream.streamKey.trim()}`
     ]);
