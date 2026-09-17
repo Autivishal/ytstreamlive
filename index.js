@@ -4,8 +4,9 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const dns = require("dns");
 const ffmpegPath = require("ffmpeg-static");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const multer = require("multer");
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -184,6 +185,35 @@ function getExpectedToken() {
     return (process.env.API_TOKEN || "").trim();
 }
 
+// Determine the most reliable FFmpeg binary executable path
+function getExecutableFFmpegPath() {
+    try {
+        const test = spawnSync("ffmpeg", ["-version"]);
+        if (test.status === 0) {
+            console.log("[FFmpeg BINARY] Using system-installed FFmpeg binary.");
+            return "ffmpeg";
+        }
+    } catch (e) {}
+    console.log("[FFmpeg BINARY] Using static FFmpeg package binary.");
+    return ffmpegPath;
+}
+
+// Resolve RTMP domain names into IPv4 addresses using Node.js DNS to prevent static glibc SIGSEGV crashes in FFmpeg static binaries
+async function resolveRtmpTargetAddress(streamKey) {
+    const rawHost = "a.rtmp.youtube.com";
+    let targetIp = rawHost;
+    try {
+        const resolved = await dns.promises.lookup(rawHost, { family: 4 });
+        if (resolved && resolved.address) {
+            targetIp = resolved.address;
+            console.log(`[DNS RESOLVE SUCCESS] Resolved YouTube RTMP host '${rawHost}' to IPv4 target: '${targetIp}'`);
+        }
+    } catch (dnsErr) {
+        console.warn(`[DNS RESOLVE WARN] Could not resolve ${rawHost} to IPv4 (${dnsErr.message}). Falling back to domain name.`);
+    }
+    return `rtmp://${targetIp}/live2/${streamKey.trim()}`;
+}
+
 let ffmpegProcess = null;
 let streamStartTime = null;
 let isStreamActive = false;
@@ -192,19 +222,21 @@ let currentStreamConfig = null;
 function spawnFFmpegLoop() {
     if (!isStreamActive || !currentStreamConfig) return;
 
-    const { resolvedUrl, streamKey, maskedKey } = currentStreamConfig;
+    const { resolvedUrl, rtmpTargetUrl, streamKey, maskedKey } = currentStreamConfig;
+    const activeFFmpegPath = getExecutableFFmpegPath();
 
     console.log(`[FFmpeg ENGINE] Spawning stream loop iteration...`);
+    console.log(`[FFmpeg ENGINE] Binary path: ${activeFFmpegPath}`);
     console.log(`[FFmpeg ENGINE] Input Source: ${resolvedUrl.substring(0, 100)}...`);
     console.log(`[FFmpeg ENGINE] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
 
-    ffmpegProcess = spawn(ffmpegPath, [
+    ffmpegProcess = spawn(activeFFmpegPath, [
         "-re",
         "-stream_loop", "-1",
         "-i", resolvedUrl,
         "-c", "copy",
         "-f", "flv",
-        `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
+        rtmpTargetUrl || `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
     ]);
 
     ffmpegProcess.stderr.on("data", data => {
@@ -456,12 +488,14 @@ app.post("/start-stream", async (req, res) => {
     }
 
     const resolvedUrl = await prepareLocalVideoFile(videoUrl);
+    const rtmpTargetUrl = await resolveRtmpTargetAddress(streamKey);
     const maskedKey = streamKey.length > 8 ? streamKey.substring(0, 4) + "..." + streamKey.substring(streamKey.length - 4) : "****";
 
     isStreamActive = true;
     streamStartTime = Date.now();
     currentStreamConfig = {
         resolvedUrl,
+        rtmpTargetUrl,
         streamKey,
         maskedKey
     };
