@@ -124,6 +124,17 @@ app.post("/upload-s3", (req, res, next) => {
 
     const tempFilePath = req.file.path;
 
+    // Set streaming headers for real-time progress updates to browser
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    const sendEvent = (obj) => {
+        if (!res.writableEnded) {
+            res.write(JSON.stringify(obj) + "\n");
+        }
+    };
+
     try {
         const sanitizedName = req.file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, "_");
         const fileKey = `videos/${Date.now()}_${sanitizedName}`;
@@ -132,9 +143,10 @@ app.post("/upload-s3", (req, res, next) => {
         const displaySize = req.file.size >= 1024 * 1024 * 1024 ? `${fileSizeGB} GB` : `${fileSizeMB} MB`;
 
         console.log(`[AWS S3] Streaming upload for ${req.file.originalname} (${displaySize}) to bucket: ${bucketName}...`);
+        sendEvent({ type: "start", message: `Starting streaming upload to AWS S3 (${displaySize})...` });
 
         const createParallelUploader = (s3ClientInstance) => {
-            return new Upload({
+            const uploader = new Upload({
                 client: s3ClientInstance,
                 params: {
                     Bucket: bucketName,
@@ -146,6 +158,23 @@ app.post("/upload-s3", (req, res, next) => {
                 queueSize: 4,
                 leavePartsOnError: false
             });
+
+            let lastPercent = -1;
+            uploader.on("httpUploadProgress", (progress) => {
+                if (!progress.total) return;
+                const percent = Math.floor((progress.loaded / progress.total) * 100);
+                if (percent !== lastPercent) {
+                    lastPercent = percent;
+                    sendEvent({
+                        type: "progress",
+                        percent,
+                        loaded: progress.loaded,
+                        total: progress.total
+                    });
+                }
+            });
+
+            return uploader;
         };
 
         try {
@@ -175,18 +204,22 @@ app.post("/upload-s3", (req, res, next) => {
 
         console.log(`[AWS S3 SUCCESS] File uploaded (${displaySize}) to: ${s3Url}`);
 
-        res.json({
+        sendEvent({
+            type: "complete",
             success: true,
             message: `Video (${displaySize}) uploaded to AWS S3 successfully!`,
             url: s3Url,
             fileKey
         });
+        res.end();
     } catch (err) {
         console.error("[AWS S3 ERROR]", err);
-        res.status(500).json({
+        sendEvent({
+            type: "error",
             success: false,
             message: `S3 Upload Error: ${err.message}`
         });
+        res.end();
     } finally {
         // Clean up temporary disk file
         if (fs.existsSync(tempFilePath)) {

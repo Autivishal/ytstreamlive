@@ -404,8 +404,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     btnRemoveFile?.addEventListener("click", resetFileSelection);
 
-    // Upload to AWS S3 via XHR (supports progress tracking)
-    btnUploadS3?.addEventListener("click", () => {
+    // Upload to AWS S3 via Fetch Streaming (supports real-time S3 upload progress tracking)
+    btnUploadS3?.addEventListener("click", async () => {
         if (!selectedVideoFile) return;
 
         const token = inputToken.value.trim();
@@ -419,7 +419,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uploadProgressContainer.classList.remove("hidden");
         uploadProgressBar.style.width = "0%";
         uploadPercentage.textContent = "0%";
-        uploadStatusText.textContent = "Uploading to S3...";
+        uploadStatusText.textContent = "Preparing upload stream...";
 
         log(`Starting upload of ${selectedVideoFile.name} to AWS S3...`, "info");
 
@@ -427,54 +427,80 @@ document.addEventListener("DOMContentLoaded", () => {
         formData.append("token", token);
         formData.append("videoFile", selectedVideoFile);
 
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/upload-s3", true);
+        try {
+            const response = await fetch("/upload-s3", {
+                method: "POST",
+                body: formData
+            });
 
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                uploadProgressBar.style.width = `${percent}%`;
-                uploadPercentage.textContent = `${percent}%`;
-                uploadStatusText.textContent = percent === 100 ? "Processing on S3..." : `Uploading (${percent}%)...`;
-            }
-        };
-
-        xhr.onload = () => {
-            let response;
-            try {
-                response = JSON.parse(xhr.responseText);
-            } catch (err) {
-                const cleanMsg = xhr.responseText.replace(/<[^>]*>/g, '').trim().slice(0, 150);
-                const errorStr = cleanMsg || `Server returned non-JSON response (HTTP ${xhr.status})`;
-                log(`S3 upload error (HTTP ${xhr.status}): ${errorStr}`, "error");
-                alert(`S3 Upload Error (HTTP ${xhr.status}): ${errorStr}`);
-                btnUploadS3.disabled = false;
-                return;
+            if (!response.ok && response.headers.get("content-type")?.includes("application/json")) {
+                const errData = await response.json();
+                throw new Error(errData.message || `HTTP ${response.status}`);
             }
 
-            if (xhr.status === 200 && response.success) {
-                uploadProgressBar.style.width = "100%";
-                uploadPercentage.textContent = "100%";
-                uploadStatusText.textContent = "Upload complete!";
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
 
-                s3ResultUrl.value = response.url;
-                s3ResultCard.classList.remove("hidden");
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-                log(`File successfully uploaded to AWS S3: ${response.url}`, "success");
-            } else {
-                log(`S3 upload failed: ${response.message || "Server error"}`, "error");
-                alert(`S3 Upload Failed: ${response.message || "Check server logs for details."}`);
-                btnUploadS3.disabled = false;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const data = JSON.parse(line.trim());
+                        if (data.type === "start") {
+                            uploadStatusText.textContent = data.message;
+                        } else if (data.type === "progress") {
+                            const percent = data.percent;
+                            uploadProgressBar.style.width = `${percent}%`;
+                            uploadPercentage.textContent = `${percent}%`;
+                            uploadStatusText.textContent = `Uploading to S3 (${percent}% - ${formatBytes(data.loaded)} / ${formatBytes(data.total)})`;
+                        } else if (data.type === "complete") {
+                            uploadProgressBar.style.width = "100%";
+                            uploadPercentage.textContent = "100%";
+                            uploadStatusText.textContent = "Upload complete!";
+                            s3ResultUrl.value = data.url;
+                            s3ResultCard.classList.remove("hidden");
+                            log(`File successfully uploaded to AWS S3: ${data.url}`, "success");
+                        } else if (data.type === "error") {
+                            throw new Error(data.message);
+                        }
+                    } catch (parseErr) {
+                        if (parseErr.message && !parseErr.message.startsWith("Unexpected token")) {
+                            throw parseErr;
+                        }
+                    }
+                }
             }
-        };
 
-        xhr.onerror = () => {
-            log("Network error during S3 upload.", "error");
-            alert("Network error while uploading to S3.");
+            if (buffer.trim()) {
+                try {
+                    const data = JSON.parse(buffer.trim());
+                    if (data.type === "complete") {
+                        uploadProgressBar.style.width = "100%";
+                        uploadPercentage.textContent = "100%";
+                        uploadStatusText.textContent = "Upload complete!";
+                        s3ResultUrl.value = data.url;
+                        s3ResultCard.classList.remove("hidden");
+                        log(`File successfully uploaded to AWS S3: ${data.url}`, "success");
+                    } else if (data.type === "error") {
+                        throw new Error(data.message);
+                    }
+                } catch (e) {
+                    // Ignore residual trailing line
+                }
+            }
+        } catch (err) {
+            log(`S3 upload error: ${err.message}`, "error");
+            alert(`S3 Upload Error: ${err.message}`);
             btnUploadS3.disabled = false;
-        };
-
-        xhr.send(formData);
+        }
     });
 
     // Copy S3 URL
