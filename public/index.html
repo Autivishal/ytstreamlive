@@ -247,7 +247,7 @@
                                 <circle cx="12" cy="12" r="2"/>
                                 <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.83a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
                             </svg>
-                            <h2>Live Stream Monitor</h2>
+                            <h2>Active Streams Dashboard</h2>
                         </div>
                         <span class="polling-indicator" title="Auto-polling health every 3 seconds">
                             <span class="poll-dot"></span> Polling active
@@ -256,33 +256,43 @@
 
                     <div class="metrics-grid">
                         <div class="metric-box">
-                            <span class="metric-label">Stream Status</span>
-                            <div class="metric-value" id="metric-status-val">OFFLINE</div>
+                            <span class="metric-label">Active Streams</span>
+                            <div class="metric-value" id="metric-status-val">0 Active</div>
                         </div>
 
                         <div class="metric-box">
-                            <span class="metric-label">Live Uptime</span>
-                            <div class="metric-value metric-clock" id="metric-uptime-val">00:00:00</div>
+                            <span class="metric-label">Free Tier Capacity</span>
+                            <div class="metric-value" id="metric-capacity-val" style="color: var(--accent-cyan);">0 / 10</div>
                         </div>
 
                         <div class="metric-box">
-                            <span class="metric-label">RTMP Target</span>
+                            <span class="metric-label">RTMP Ingest</span>
                             <div class="metric-value small">a.rtmp.youtube.com</div>
                         </div>
 
                         <div class="metric-box">
-                            <span class="metric-label">FFmpeg Mode</span>
-                            <div class="metric-value small">Looped H.264 / AAC</div>
+                            <span class="metric-label">Stream Limit</span>
+                            <div class="metric-value small">12 Hours / Stream</div>
                         </div>
                     </div>
 
-                    <div class="info-banner">
+                    <!-- Active Streams Container -->
+                    <div class="active-streams-section" style="margin-top: 1rem;">
+                        <h3 style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">Running Streams</h3>
+                        <div id="active-streams-list" class="active-streams-list">
+                            <div class="no-streams-placeholder" style="padding: 1rem; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px dashed rgba(255,255,255,0.08); font-size: 0.9rem;">
+                                No active streams. Fill out the configuration form and click "Start Live Stream".
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="info-banner" style="margin-top: 1rem;">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"/>
                             <line x1="12" y1="16" x2="12" y2="12"/>
                             <line x1="12" y1="8" x2="12.01" y2="8"/>
                         </svg>
-                        <span>The video stream loops endlessly (`-stream_loop -1`) with standard 24-hour max safety cut-off.</span>
+                        <span>Multi-Stream Mode active on Render Free Tier. Streams automatically exit after 12 hours (`12 * 60 * 60 * 1000` ms).</span>
                     </div>
                 </section>
 

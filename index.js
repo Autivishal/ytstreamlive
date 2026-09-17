@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const dns = require("dns");
+const crypto = require("crypto");
 const ffmpegPath = require("ffmpeg-static");
 const { spawn, spawnSync } = require("child_process");
 const multer = require("multer");
@@ -73,7 +74,15 @@ async function prepareLocalVideoFile(videoUrl) {
         return trimmedUrl; // Already a local file path
     }
 
-    const localCachePath = path.join(os.tmpdir(), "stream_input_video.mp4");
+    const urlHash = crypto.createHash("md5").update(trimmedUrl.split("?")[0]).digest("hex").substring(0, 12);
+    const localCachePath = path.join(os.tmpdir(), `cache_video_${urlHash}.mp4`);
+
+    if (fs.existsSync(localCachePath) && fs.statSync(localCachePath).size > 0) {
+        const sizeMB = (fs.statSync(localCachePath).size / (1024 * 1024)).toFixed(2);
+        console.log(`[VIDEO STREAM CACHE] Reusing existing cached video file (${sizeMB} MB): ${localCachePath}`);
+        return localCachePath;
+    }
+
     console.log(`[VIDEO STREAM CACHE] Preparing local stream input file: ${localCachePath}...`);
 
     const bucketName = process.env.AWS_BUCKET_NAME;
@@ -214,60 +223,86 @@ async function resolveRtmpTargetAddress(streamKey) {
     return `rtmp://${targetIp}/live2/${streamKey.trim()}`;
 }
 
-let ffmpegProcess = null;
-let streamStartTime = null;
-let isStreamActive = false;
-let currentStreamConfig = null;
+const activeStreams = new Map(); // Key: streamId
+const MAX_CONCURRENT_STREAMS = 10; // Safety cap for Render Free Tier (512 MB RAM)
+const MAX_STREAM_DURATION_MS = 12 * 60 * 60 * 1000; // 12-hour limit per stream
 
-function spawnFFmpegLoop() {
-    if (!isStreamActive || !currentStreamConfig) return;
+function spawnStreamLoop(streamId) {
+    const stream = activeStreams.get(streamId);
+    if (!stream || !stream.isStreamActive) return;
 
-    const { resolvedUrl, rtmpTargetUrl, streamKey, maskedKey } = currentStreamConfig;
     const activeFFmpegPath = getExecutableFFmpegPath();
 
-    console.log(`[FFmpeg ENGINE] Spawning stream loop iteration...`);
-    console.log(`[FFmpeg ENGINE] Binary path: ${activeFFmpegPath}`);
-    console.log(`[FFmpeg ENGINE] Input Source: ${resolvedUrl.substring(0, 100)}...`);
-    console.log(`[FFmpeg ENGINE] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
+    console.log(`[FFmpeg ENGINE][${streamId}] Spawning stream loop iteration...`);
+    console.log(`[FFmpeg ENGINE][${streamId}] Binary path: ${activeFFmpegPath}`);
+    console.log(`[FFmpeg ENGINE][${streamId}] Input Source: ${stream.resolvedUrl.substring(0, 100)}...`);
+    console.log(`[FFmpeg ENGINE][${streamId}] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${stream.maskedKey}`);
 
-    ffmpegProcess = spawn(activeFFmpegPath, [
+    const processInstance = spawn(activeFFmpegPath, [
         "-re",
         "-stream_loop", "-1",
-        "-i", resolvedUrl,
+        "-i", stream.resolvedUrl,
         "-c", "copy",
         "-f", "flv",
-        rtmpTargetUrl || `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
+        stream.rtmpTargetUrl || `rtmp://a.rtmp.youtube.com/live2/${stream.streamKey.trim()}`
     ]);
 
-    ffmpegProcess.stderr.on("data", data => {
+    stream.ffmpegProcess = processInstance;
+
+    processInstance.stderr.on("data", data => {
         const line = data.toString().trim();
         if (line) {
-            console.log(`[FFmpeg STDERR] ${line}`);
+            console.log(`[FFmpeg STDERR][${streamId}] ${line}`);
         }
     });
 
-    ffmpegProcess.on("error", err => {
-        console.error("[FFmpeg PROCESS ERROR]", err);
+    processInstance.on("error", err => {
+        console.error(`[FFmpeg PROCESS ERROR][${streamId}]`, err);
     });
 
-    ffmpegProcess.on("close", (code, signal) => {
-        console.log(`[FFmpeg EXIT] Process exited with code ${code}, signal: ${signal}`);
-        ffmpegProcess = null;
+    processInstance.on("close", (code, signal) => {
+        console.log(`[FFmpeg EXIT][${streamId}] Process exited with code ${code}, signal: ${signal}`);
+        const currentStream = activeStreams.get(streamId);
+        if (!currentStream) return;
 
-        // Auto-restart loop if streaming is active and not stopped explicitly by user
-        if (isStreamActive) {
-            console.log(`[FFmpeg ENGINE] FFmpeg exited (code: ${code}, signal: ${signal}). Auto-restarting stream loop in 2s...`);
+        currentStream.ffmpegProcess = null;
+
+        // Auto-restart loop if streaming is active for this stream and not stopped explicitly by user
+        if (currentStream.isStreamActive) {
+            console.log(`[FFmpeg ENGINE][${streamId}] FFmpeg exited. Auto-restarting stream loop in 2s...`);
             setTimeout(() => {
-                if (isStreamActive) {
-                    spawnFFmpegLoop();
+                if (activeStreams.has(streamId) && activeStreams.get(streamId).isStreamActive) {
+                    spawnStreamLoop(streamId);
                 }
             }, 2000);
         } else {
-            streamStartTime = null;
-            currentStreamConfig = null;
-            console.log("[FFmpeg ENGINE] Stream stopped cleanly.");
+            stopAndRemoveStream(streamId);
+            console.log(`[FFmpeg ENGINE][${streamId}] Stream stopped cleanly.`);
         }
     });
+}
+
+function stopAndRemoveStream(streamId) {
+    const stream = activeStreams.get(streamId);
+    if (!stream) return false;
+
+    stream.isStreamActive = false;
+
+    if (stream.durationTimeout) {
+        clearTimeout(stream.durationTimeout);
+        stream.durationTimeout = null;
+    }
+
+    if (stream.ffmpegProcess) {
+        try {
+            stream.ffmpegProcess.kill("SIGTERM");
+        } catch (e) {}
+        stream.ffmpegProcess = null;
+    }
+
+    activeStreams.delete(streamId);
+    console.log(`[STREAM REMOVED] Stream ${streamId} successfully terminated and removed.`);
+    return true;
 }
 
 // Endpoint: Upload Video File directly to AWS S3 (Supports up to 5 GB via Multipart Streaming)
@@ -471,14 +506,6 @@ app.post("/start-stream", async (req, res) => {
         });
     }
 
-    if (isStreamActive || ffmpegProcess) {
-        console.warn("[START STREAM] Request rejected: Stream already running.");
-        return res.status(400).json({
-            success: false,
-            message: "Stream already running"
-        });
-    }
-
     if (!streamKey || streamKey.trim().length < 5) {
         console.warn("[START STREAM] Request rejected: YouTube Stream Key is missing or invalid.");
         return res.status(400).json({
@@ -487,43 +514,68 @@ app.post("/start-stream", async (req, res) => {
         });
     }
 
-    const resolvedUrl = await prepareLocalVideoFile(videoUrl);
-    const rtmpTargetUrl = await resolveRtmpTargetAddress(streamKey);
-    const maskedKey = streamKey.length > 8 ? streamKey.substring(0, 4) + "..." + streamKey.substring(streamKey.length - 4) : "****";
+    const cleanKey = streamKey.trim();
 
-    isStreamActive = true;
-    streamStartTime = Date.now();
-    currentStreamConfig = {
+    // Check if a stream with identical streamKey is already running
+    for (const [sId, sObj] of activeStreams.entries()) {
+        if (sObj.streamKey === cleanKey) {
+            console.warn(`[START STREAM] Rejected: Stream key ${sObj.maskedKey} is already streaming.`);
+            return res.status(400).json({
+                success: false,
+                message: `A stream is already active for this YouTube Stream Key (${sObj.maskedKey}).`
+            });
+        }
+    }
+
+    // Safety limit check for Render Free Tier
+    if (activeStreams.size >= MAX_CONCURRENT_STREAMS) {
+        console.warn(`[START STREAM] Rejected: Max capacity of ${MAX_CONCURRENT_STREAMS} streams reached.`);
+        return res.status(400).json({
+            success: false,
+            message: `Maximum stream capacity reached (${MAX_CONCURRENT_STREAMS} active streams). Stop an existing stream before launching a new one.`
+        });
+    }
+
+    const streamId = `stream_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const resolvedUrl = await prepareLocalVideoFile(videoUrl);
+    const rtmpTargetUrl = await resolveRtmpTargetAddress(cleanKey);
+    const maskedKey = cleanKey.length > 8 ? cleanKey.substring(0, 4) + "..." + cleanKey.substring(cleanKey.length - 4) : "****";
+
+    const durationTimeout = setTimeout(() => {
+        console.log(`[FFmpeg TIMEOUT][${streamId}] 12-hour limit reached. Auto-stopping stream.`);
+        stopAndRemoveStream(streamId);
+    }, MAX_STREAM_DURATION_MS);
+
+    const streamEntry = {
+        streamId,
+        streamKey: cleanKey,
+        maskedKey,
+        videoUrl,
         resolvedUrl,
         rtmpTargetUrl,
-        streamKey,
-        maskedKey
+        ffmpegProcess: null,
+        startTime: Date.now(),
+        isStreamActive: true,
+        durationTimeout
     };
 
-    spawnFFmpegLoop();
-
-    setTimeout(() => {
-        if (isStreamActive) {
-            console.log("[FFmpeg TIMEOUT] 24-hour stream limit reached. Stopping stream.");
-            isStreamActive = false;
-            if (ffmpegProcess) {
-                ffmpegProcess.kill("SIGTERM");
-            }
-        }
-    }, 24 * 60 * 60 * 1000);
+    activeStreams.set(streamId, streamEntry);
+    spawnStreamLoop(streamId);
 
     res.json({
         success: true,
-        message: "Stream started"
+        message: "Live stream started successfully",
+        streamId,
+        maskedKey
     });
 });
 
 app.post("/stop-stream", (req, res) => {
-    const { token } = req.body;
+    const { token, streamId } = req.body;
     const expectedToken = getExpectedToken();
     const receivedToken = (token || "").trim();
 
-    console.log(`[${new Date().toISOString()}] POST /stop-stream received.`);
+    console.log(`[${new Date().toISOString()}] POST /stop-stream received (Target streamId: ${streamId || "ALL"}).`);
 
     if (receivedToken !== expectedToken) {
         console.warn(`[AUTH FAILED] Stop stream rejected: Invalid token.`);
@@ -533,30 +585,52 @@ app.post("/stop-stream", (req, res) => {
         });
     }
 
-    isStreamActive = false;
-    if (ffmpegProcess) {
-        console.log("[STOP STREAM] Terminating FFmpeg process via SIGTERM.");
-        ffmpegProcess.kill("SIGTERM");
-        ffmpegProcess = null;
-        streamStartTime = null;
-        currentStreamConfig = null;
-    } else {
-        console.log("[STOP STREAM] No active stream running.");
-        streamStartTime = null;
-        currentStreamConfig = null;
+    if (streamId) {
+        const stopped = stopAndRemoveStream(streamId);
+        if (!stopped) {
+            return res.status(404).json({
+                success: false,
+                message: `Stream with ID '${streamId}' was not found or is not active.`
+            });
+        }
+        return res.json({
+            success: true,
+            message: `Stream '${streamId}' stopped successfully.`
+        });
+    }
+
+    // Stop all active streams if no streamId specified
+    let stoppedCount = 0;
+    for (const sId of Array.from(activeStreams.keys())) {
+        if (stopAndRemoveStream(sId)) stoppedCount++;
     }
 
     res.json({
         success: true,
-        message: "Stream stopped"
+        message: `Stopped ${stoppedCount} active stream(s).`
     });
 });
 
 app.get("/health", (req, res) => {
-    const uptimeSeconds = streamStartTime ? Math.floor((Date.now() - streamStartTime) / 1000) : 0;
+    const streamsList = [];
+    const now = Date.now();
+
+    for (const [sId, sObj] of activeStreams.entries()) {
+        const uptimeSeconds = Math.floor((now - sObj.startTime) / 1000);
+        streamsList.push({
+            streamId: sId,
+            maskedKey: sObj.maskedKey,
+            videoUrl: sObj.videoUrl,
+            uptimeSeconds,
+            running: sObj.isStreamActive
+        });
+    }
+
     res.json({
-        running: isStreamActive || !!ffmpegProcess,
-        uptime: uptimeSeconds
+        running: activeStreams.size > 0,
+        runningCount: activeStreams.size,
+        maxLimit: MAX_CONCURRENT_STREAMS,
+        streams: streamsList
     });
 });
 

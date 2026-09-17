@@ -120,43 +120,80 @@ document.addEventListener("DOMContentLoaded", () => {
             .join(":");
     }
 
-    // -------------------------------------------------------------------------
-    // Stream Status UI Update
-    // -------------------------------------------------------------------------
-    function updateUIStatus(running, uptimeSeconds = 0) {
-        isStreamRunning = running;
+    const activeStreamsList = document.getElementById("active-streams-list");
+    const metricCapacityVal = document.getElementById("metric-capacity-val");
 
-        if (running) {
-            serverBadge.classList.add("online");
-            serverStatusText.textContent = "Online";
+    // -------------------------------------------------------------------------
+    // Stream Status UI Update for Multi-Stream Mode
+    // -------------------------------------------------------------------------
+    function updateUIStatus(streamsData) {
+        const count = streamsData.runningCount || 0;
+        const maxLimit = streamsData.maxLimit || 10;
+        const streams = streamsData.streams || [];
 
+        serverBadge.classList.add("online");
+        serverStatusText.textContent = "Online";
+
+        if (count > 0) {
             streamBadge.className = "stream-badge status-live";
-            streamStatusText.textContent = "LIVE";
+            streamStatusText.textContent = `${count} LIVE`;
 
-            metricStatusVal.textContent = "LIVE";
+            metricStatusVal.textContent = `${count} Active`;
             metricStatusVal.style.color = "var(--accent-red)";
-
-            btnStart.disabled = true;
             btnStop.disabled = false;
-
-            currentUptimeSeconds = uptimeSeconds;
-            metricUptimeVal.textContent = formatTime(currentUptimeSeconds);
         } else {
-            serverBadge.classList.add("online");
-            serverStatusText.textContent = "Online";
-
             streamBadge.className = "stream-badge status-offline";
             streamStatusText.textContent = "OFFLINE";
 
-            metricStatusVal.textContent = "OFFLINE";
+            metricStatusVal.textContent = "0 Active";
             metricStatusVal.style.color = "var(--text-muted)";
-
-            btnStart.disabled = false;
             btnStop.disabled = true;
-
-            currentUptimeSeconds = 0;
-            metricUptimeVal.textContent = "00:00:00";
         }
+
+        if (metricCapacityVal) {
+            metricCapacityVal.textContent = `${count} / ${maxLimit}`;
+        }
+
+        btnStart.disabled = count >= maxLimit;
+
+        // Render Active Stream Cards
+        if (!activeStreamsList) return;
+
+        if (streams.length === 0) {
+            activeStreamsList.innerHTML = `
+                <div class="no-streams-placeholder" style="padding: 1rem; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px dashed rgba(255,255,255,0.08); font-size: 0.85rem;">
+                    No active streams running. Configure a stream and click "Start Live Stream".
+                </div>
+            `;
+            return;
+        }
+
+        let html = "";
+        streams.forEach(st => {
+            html += `
+                <div class="stream-card-item" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.75rem 0.9rem; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                    <div style="overflow: hidden;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.15rem;">
+                            <span class="stream-badge status-live" style="font-size: 0.65rem; padding: 2px 6px; border-radius: 4px;">LIVE</span>
+                            <span style="font-family: var(--font-mono); font-weight: 600; color: #fff; font-size: 0.85rem;">${st.maskedKey}</span>
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 240px;" title="${st.videoUrl}">${st.videoUrl}</div>
+                        <div style="font-size: 0.75rem; color: var(--accent-cyan); margin-top: 0.15rem;">Uptime: ${formatTime(st.uptimeSeconds)} / 12:00:00</div>
+                    </div>
+                    <button type="button" class="btn-stop-single" data-stream-id="${st.streamId}" style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; padding: 5px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">Stop</button>
+                </div>
+            `;
+        });
+
+        activeStreamsList.innerHTML = html;
+
+        // Attach event listeners to individual stop buttons
+        activeStreamsList.querySelectorAll(".btn-stop-single").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const streamId = btn.getAttribute("data-stream-id");
+                await stopSingleStream(streamId);
+            });
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -167,8 +204,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const response = await fetch("/health");
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
-            
-            updateUIStatus(data.running, data.uptime || 0);
+
+            updateUIStatus(data);
         } catch (err) {
             serverBadge.classList.remove("online");
             serverStatusText.textContent = "Disconnected";
@@ -244,40 +281,72 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
-                log(`Stream launched successfully! ${data.message}`, "success");
-                updateUIStatus(true, 0);
+                log(`Stream launched successfully! (${data.maskedKey})`, "success");
+                checkHealth();
             } else {
                 let errorMsg = `Start stream failed: ${data.message || response.statusText}`;
                 if (response.status === 401) {
                     errorMsg += " (Token mismatch. Make sure your input matches API_TOKEN in server .env)";
                 }
                 log(errorMsg, "error");
-                btnStart.disabled = false;
             }
         } catch (err) {
             log(`Network error starting stream: ${err.message}`, "error");
+        } finally {
             btnStart.disabled = false;
         }
     });
 
+    // Helper: Stop Single Stream
+    async function stopSingleStream(streamId) {
+        const token = inputToken.value.trim();
+
+        if (!token) {
+            alert("Please enter your API Security Token to stop streams.");
+            inputToken.focus();
+            return;
+        }
+
+        log(`Stopping stream '${streamId}'...`, "warning");
+
+        try {
+            const response = await fetch("/stop-stream", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token, streamId })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                log(`Stream stopped successfully: ${data.message}`, "success");
+                checkHealth();
+            } else {
+                log(`Stop stream failed: ${data.message || response.statusText}`, "error");
+            }
+        } catch (err) {
+            log(`Network error stopping stream: ${err.message}`, "error");
+        }
+    }
+
     // -------------------------------------------------------------------------
-    // API Call: Stop Stream
+    // API Call: Stop All Streams
     // -------------------------------------------------------------------------
     btnStop?.addEventListener("click", async () => {
         const token = inputToken.value.trim();
 
         if (!token) {
-            alert("Please enter your API Security Token to stop the stream.");
+            alert("Please enter your API Security Token to stop streams.");
             inputToken.focus();
             return;
         }
 
-        if (!confirm("Are you sure you want to stop the live stream?")) {
+        if (!confirm("Are you sure you want to stop ALL active live streams?")) {
             return;
         }
 
         btnStop.disabled = true;
-        log("Sending stop stream command...", "warning");
+        log("Sending stop command for ALL active streams...", "warning");
 
         try {
             const response = await fetch("/stop-stream", {
@@ -289,14 +358,14 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
-                log("Stream stopped successfully.", "success");
-                updateUIStatus(false, 0);
+                log(`All streams stopped: ${data.message}`, "success");
+                checkHealth();
             } else {
-                log(`Stop stream failed: ${data.message || response.statusText}`, "error");
-                btnStop.disabled = false;
+                log(`Stop streams failed: ${data.message || response.statusText}`, "error");
             }
         } catch (err) {
-            log(`Network error stopping stream: ${err.message}`, "error");
+            log(`Network error stopping streams: ${err.message}`, "error");
+        } finally {
             btnStop.disabled = false;
         }
     });
