@@ -202,15 +202,7 @@ function spawnFFmpegLoop() {
         "-re",
         "-stream_loop", "-1",
         "-i", resolvedUrl,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-maxrate", "3000k",
-        "-bufsize", "6000k",
-        "-pix_fmt", "yuv420p",
-        "-g", "60",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", "44100",
+        "-c", "copy",
         "-f", "flv",
         `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
     ]);
@@ -231,14 +223,14 @@ function spawnFFmpegLoop() {
         ffmpegProcess = null;
 
         // Auto-restart loop if streaming is active and not stopped explicitly by user
-        if (isStreamActive && !signal) {
-            console.log("[FFmpeg ENGINE] Video playback iteration finished. Auto-restarting stream loop in 1s...");
+        if (isStreamActive) {
+            console.log(`[FFmpeg ENGINE] FFmpeg exited (code: ${code}, signal: ${signal}). Auto-restarting stream loop in 2s...`);
             setTimeout(() => {
                 if (isStreamActive) {
                     spawnFFmpegLoop();
                 }
-            }, 1000);
-        } else if (!isStreamActive) {
+            }, 2000);
+        } else {
             streamStartTime = null;
             currentStreamConfig = null;
             console.log("[FFmpeg ENGINE] Stream stopped cleanly.");
