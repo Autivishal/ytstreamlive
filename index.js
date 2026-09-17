@@ -98,6 +98,64 @@ function getExpectedToken() {
 
 let ffmpegProcess = null;
 let streamStartTime = null;
+let isStreamActive = false;
+let currentStreamConfig = null;
+
+function spawnFFmpegLoop() {
+    if (!isStreamActive || !currentStreamConfig) return;
+
+    const { resolvedUrl, streamKey, maskedKey } = currentStreamConfig;
+
+    console.log(`[FFmpeg ENGINE] Spawning stream loop iteration...`);
+    console.log(`[FFmpeg ENGINE] Input Source: ${resolvedUrl.substring(0, 100)}...`);
+    console.log(`[FFmpeg ENGINE] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
+
+    ffmpegProcess = spawn(ffmpegPath, [
+        "-re",
+        "-i", resolvedUrl,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-maxrate", "3000k",
+        "-bufsize", "6000k",
+        "-pix_fmt", "yuv420p",
+        "-g", "60",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-f", "flv",
+        `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
+    ]);
+
+    ffmpegProcess.stderr.on("data", data => {
+        const line = data.toString().trim();
+        if (line) {
+            console.log(`[FFmpeg STDERR] ${line}`);
+        }
+    });
+
+    ffmpegProcess.on("error", err => {
+        console.error("[FFmpeg PROCESS ERROR]", err);
+    });
+
+    ffmpegProcess.on("close", (code, signal) => {
+        console.log(`[FFmpeg EXIT] Process exited with code ${code}, signal: ${signal}`);
+        ffmpegProcess = null;
+
+        // Auto-restart loop if streaming is active and not stopped explicitly by user
+        if (isStreamActive && !signal) {
+            console.log("[FFmpeg ENGINE] Video playback iteration finished. Auto-restarting stream loop in 1s...");
+            setTimeout(() => {
+                if (isStreamActive) {
+                    spawnFFmpegLoop();
+                }
+            }, 1000);
+        } else if (!isStreamActive) {
+            streamStartTime = null;
+            currentStreamConfig = null;
+            console.log("[FFmpeg ENGINE] Stream stopped cleanly.");
+        }
+    });
+}
 
 // Endpoint: Upload Video File directly to AWS S3 (Supports up to 5 GB via Multipart Streaming)
 app.post("/upload-s3", (req, res, next) => {
@@ -300,7 +358,7 @@ app.post("/start-stream", async (req, res) => {
         });
     }
 
-    if (ffmpegProcess) {
+    if (isStreamActive || ffmpegProcess) {
         console.warn("[START STREAM] Request rejected: Stream already running.");
         return res.status(400).json({
             success: false,
@@ -318,55 +376,24 @@ app.post("/start-stream", async (req, res) => {
 
     const resolvedUrl = await resolveStreamableUrl(videoUrl);
     const maskedKey = streamKey.length > 8 ? streamKey.substring(0, 4) + "..." + streamKey.substring(streamKey.length - 4) : "****";
-    console.log(`[START STREAM] Starting FFmpeg live stream loop...`);
-    console.log(`[START STREAM] Input Source: ${resolvedUrl.substring(0, 100)}...`);
-    console.log(`[START STREAM] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
-    
+
+    isStreamActive = true;
     streamStartTime = Date.now();
+    currentStreamConfig = {
+        resolvedUrl,
+        streamKey,
+        maskedKey
+    };
 
-    ffmpegProcess = spawn(ffmpegPath, [
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-re",
-        "-stream_loop", "-1",
-        "-i", resolvedUrl,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-maxrate", "3000k",
-        "-bufsize", "6000k",
-        "-pix_fmt", "yuv420p",
-        "-g", "60",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", "44100",
-        "-f", "flv",
-        `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
-    ]);
-
-    ffmpegProcess.stderr.on("data", data => {
-        const line = data.toString().trim();
-        if (line) {
-            console.log(`[FFmpeg STDERR] ${line}`);
-        }
-    });
-
-    ffmpegProcess.on("error", err => {
-        console.error("[FFmpeg PROCESS ERROR]", err);
-    });
-
-    ffmpegProcess.on("close", (code, signal) => {
-        console.log(`[FFmpeg EXIT] Process exited with code ${code}, signal: ${signal}`);
-        ffmpegProcess = null;
-        streamStartTime = null;
-    });
+    spawnFFmpegLoop();
 
     setTimeout(() => {
-        if (ffmpegProcess) {
+        if (isStreamActive) {
             console.log("[FFmpeg TIMEOUT] 24-hour stream limit reached. Stopping stream.");
-            ffmpegProcess.kill("SIGTERM");
-            ffmpegProcess = null;
-            streamStartTime = null;
+            isStreamActive = false;
+            if (ffmpegProcess) {
+                ffmpegProcess.kill("SIGTERM");
+            }
         }
     }, 24 * 60 * 60 * 1000);
 
@@ -391,13 +418,17 @@ app.post("/stop-stream", (req, res) => {
         });
     }
 
+    isStreamActive = false;
     if (ffmpegProcess) {
         console.log("[STOP STREAM] Terminating FFmpeg process via SIGTERM.");
         ffmpegProcess.kill("SIGTERM");
         ffmpegProcess = null;
         streamStartTime = null;
+        currentStreamConfig = null;
     } else {
         console.log("[STOP STREAM] No active stream running.");
+        streamStartTime = null;
+        currentStreamConfig = null;
     }
 
     res.json({
@@ -409,7 +440,7 @@ app.post("/stop-stream", (req, res) => {
 app.get("/health", (req, res) => {
     const uptimeSeconds = streamStartTime ? Math.floor((Date.now() - streamStartTime) / 1000) : 0;
     res.json({
-        running: !!ffmpegProcess,
+        running: isStreamActive || !!ffmpegProcess,
         uptime: uptimeSeconds
     });
 });
