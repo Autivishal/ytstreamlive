@@ -1,13 +1,48 @@
-require("dotenv").config();
+require("dotenv").config({ override: true });
 
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
 const ffmpegPath = require("ffmpeg-static");
 const { spawn } = require("child_process");
+const multer = require("multer");
+const { S3Client } = require("@aws-sdk/client-s3");
+const { Upload } = require("@aws-sdk/lib-storage");
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+// Multer disk storage configuration supporting up to 5 GB files without OOM issues
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, os.tmpdir());
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
+        const sanitized = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+        cb(null, `${uniqueSuffix}-${sanitized}`);
+    }
+});
+
+const upload = multer({
+    storage,
+    limits: { fileSize: Infinity } // Avoid 32-bit integer overflow truncation in busboy/multer
+});
+
+// Helper to construct AWS S3 Client
+function getS3Client() {
+    const region = process.env.AWS_REGION;
+    const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    if (!region || !accessKeyId || !secretAccessKey) return null;
+
+    return new S3Client({
+        region,
+        credentials: { accessKeyId, secretAccessKey }
+    });
+}
 
 // Helper function to get clean, trimmed expected API Token
 function getExpectedToken() {
@@ -16,6 +51,151 @@ function getExpectedToken() {
 
 let ffmpegProcess = null;
 let streamStartTime = null;
+
+// Endpoint: Upload Video File directly to AWS S3 (Supports up to 5 GB via Multipart Streaming)
+app.post("/upload-s3", (req, res, next) => {
+    upload.single("videoFile")(req, res, (err) => {
+        if (err) {
+            console.error("[MULTER ERROR]", err);
+            if (err instanceof multer.MulterError) {
+                return res.status(400).json({
+                    success: false,
+                    message: `File upload error: ${err.message}`
+                });
+            }
+            return res.status(500).json({
+                success: false,
+                message: `Upload processing failed: ${err.message}`
+            });
+        }
+        next();
+    });
+}, async (req, res) => {
+    const token = req.body.token;
+    const expectedToken = getExpectedToken();
+    const receivedToken = (token || "").trim();
+
+    console.log(`[${new Date().toISOString()}] POST /upload-s3 received.`);
+
+    if (!expectedToken) {
+        if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(500).json({
+            success: false,
+            message: "Server configuration error: API_TOKEN is not set in environment."
+        });
+    }
+
+    if (receivedToken !== expectedToken) {
+        if (req.file && req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(401).json({
+            success: false,
+            message: "Invalid token"
+        });
+    }
+
+    if (!req.file) {
+        return res.status(400).json({
+            success: false,
+            message: "No video file uploaded."
+        });
+    }
+
+    const FIVE_GB = 5 * 1024 * 1024 * 1024;
+    if (req.file.size > FIVE_GB) {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({
+            success: false,
+            message: "File upload error: File size exceeds the maximum allowed limit of 5 GB."
+        });
+    }
+
+    const bucketName = process.env.AWS_BUCKET_NAME;
+    const region = process.env.AWS_REGION;
+    const s3 = getS3Client();
+
+    if (!s3 || !bucketName) {
+        if (req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        console.error("[AWS S3] Missing environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_BUCKET_NAME");
+        return res.status(500).json({
+            success: false,
+            message: "AWS S3 credentials not configured in server environment (.env). Please set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, and AWS_BUCKET_NAME."
+        });
+    }
+
+    const tempFilePath = req.file.path;
+
+    try {
+        const sanitizedName = req.file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+        const fileKey = `videos/${Date.now()}_${sanitizedName}`;
+        const fileSizeGB = (req.file.size / (1024 * 1024 * 1024)).toFixed(2);
+        const fileSizeMB = (req.file.size / (1024 * 1024)).toFixed(2);
+        const displaySize = req.file.size >= 1024 * 1024 * 1024 ? `${fileSizeGB} GB` : `${fileSizeMB} MB`;
+
+        console.log(`[AWS S3] Streaming upload for ${req.file.originalname} (${displaySize}) to bucket: ${bucketName}...`);
+
+        const createParallelUploader = (s3ClientInstance) => {
+            return new Upload({
+                client: s3ClientInstance,
+                params: {
+                    Bucket: bucketName,
+                    Key: fileKey,
+                    Body: fs.createReadStream(tempFilePath),
+                    ContentType: req.file.mimetype || "video/mp4"
+                },
+                partSize: 10 * 1024 * 1024, // 10MB chunk parts
+                queueSize: 4,
+                leavePartsOnError: false
+            });
+        };
+
+        try {
+            const parallelUpload = createParallelUploader(s3);
+            await parallelUpload.done();
+        } catch (initialErr) {
+            if (initialErr.message && initialErr.message.includes("addressed using the specified endpoint")) {
+                console.warn("[AWS S3] Endpoint redirect detected. Retrying with global S3 endpoint fallback...");
+                const fallbackClient = new S3Client({
+                    region: "us-east-1",
+                    endpoint: "https://s3.amazonaws.com",
+                    credentials: {
+                        accessKeyId: (process.env.AWS_ACCESS_KEY_ID || "").trim(),
+                        secretAccessKey: (process.env.AWS_SECRET_ACCESS_KEY || "").trim()
+                    }
+                });
+                const fallbackUpload = createParallelUploader(fallbackClient);
+                await fallbackUpload.done();
+            } else {
+                throw initialErr;
+            }
+        }
+
+        const s3Url = (region === "us-east-1")
+            ? `https://${bucketName}.s3.amazonaws.com/${fileKey}`
+            : `https://${bucketName}.s3.${region}.amazonaws.com/${fileKey}`;
+
+        console.log(`[AWS S3 SUCCESS] File uploaded (${displaySize}) to: ${s3Url}`);
+
+        res.json({
+            success: true,
+            message: `Video (${displaySize}) uploaded to AWS S3 successfully!`,
+            url: s3Url,
+            fileKey
+        });
+    } catch (err) {
+        console.error("[AWS S3 ERROR]", err);
+        res.status(500).json({
+            success: false,
+            message: `S3 Upload Error: ${err.message}`
+        });
+    } finally {
+        // Clean up temporary disk file
+        if (fs.existsSync(tempFilePath)) {
+            fs.unlink(tempFilePath, (unlinkErr) => {
+                if (unlinkErr) console.error("[TEMP FILE CLEANUP ERROR]", unlinkErr);
+            });
+        }
+    }
+});
 
 app.post("/start-stream", (req, res) => {
     const { token, videoUrl, streamKey } = req.body;
@@ -155,6 +335,15 @@ app.get("/ffmpeg-check", (req, res) => {
             ffmpegPath,
             output: output.split("\n")[0]
         });
+    });
+});
+
+// Global Express JSON Error Handler (catches any unhandled errors and prevents HTML output)
+app.use((err, req, res, next) => {
+    console.error("[GLOBAL SERVER ERROR]", err);
+    res.status(err.status || 500).json({
+        success: false,
+        message: err.message || "Internal Server Error"
     });
 });
 

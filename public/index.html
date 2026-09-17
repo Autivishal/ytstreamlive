@@ -43,108 +43,199 @@
 
         <!-- Main Dashboard Grid -->
         <main class="dashboard-grid">
-            <!-- Left Column: Controls & Configuration -->
-            <section class="card control-card">
-                <div class="card-header">
-                    <div class="card-title">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="2" y="4" width="20" height="16" rx="2"/>
-                            <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12"/>
-                        </svg>
-                        <h2>Stream Configuration</h2>
-                    </div>
-                    <button type="button" class="btn-text" id="btn-remember-toggle" title="Save credentials in browser local storage">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                            <polyline points="17 21 17 13 7 13 7 21"/>
-                            <polyline points="7 3 7 8 15 8"/>
-                        </svg>
-                        Auto-Save Credentials
-                    </button>
-                </div>
-
-                <form id="stream-form" onsubmit="return false;">
-                    <!-- API Token Input -->
-                    <div class="form-group">
-                        <label for="input-token">
-                            <span>API Security Token</span>
-                            <span class="badge-optional">Required</span>
-                        </label>
-                        <div class="input-wrapper">
-                            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            <!-- Left Column: Controls & S3 Uploader -->
+            <div class="left-column">
+                <section class="card control-card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                                <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12"/>
                             </svg>
-                            <input type="password" id="input-token" placeholder="Enter API_TOKEN set in .env" required autocomplete="current-password">
-                            <button type="button" class="btn-icon toggle-password" data-target="input-token" title="Toggle visibility">
-                                <svg class="icon eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                    <circle cx="12" cy="12" r="3"/>
-                                </svg>
-                            </button>
+                            <h2>Stream Configuration</h2>
                         </div>
-                        <span class="help-text">Must match `API_TOKEN` configured on server `.env`.</span>
-                    </div>
-
-                    <!-- Video Source URL Input -->
-                    <div class="form-group">
-                        <label for="input-video-url">
-                            <span>Video Source URL</span>
-                            <span class="badge-info">Direct HTTP / MP4 / HLS</span>
-                        </label>
-                        <div class="input-wrapper">
-                            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                        <button type="button" class="btn-text" id="btn-remember-toggle" title="Save credentials in browser local storage">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                <polyline points="17 21 17 13 7 13 7 21"/>
+                                <polyline points="7 3 7 8 15 8"/>
                             </svg>
-                            <input type="url" id="input-video-url" placeholder="https://example.com/video.mp4" required>
-                        </div>
-                        <div class="sample-links">
-                            <span>Samples:</span>
-                            <button type="button" class="btn-chip" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny</button>
-                            <button type="button" class="btn-chip" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4">Tears of Steel</button>
-                        </div>
-                    </div>
-
-                    <!-- YouTube Stream Key Input -->
-                    <div class="form-group">
-                        <label for="input-stream-key">
-                            <span>YouTube Stream Key</span>
-                            <span class="badge-optional">Secret</span>
-                        </label>
-                        <div class="input-wrapper">
-                            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 2l-2 2m-2 2l-2 2m2-2l2 2m-7 1a5 5 0 1 1-7.5-6.5 5 5 0 0 1 6.5 7.5z"/>
-                                <path d="M15 9l-4 4"/>
-                            </svg>
-                            <input type="password" id="input-stream-key" placeholder="xxxx-xxxx-xxxx-xxxx-xxxx" required autocomplete="off">
-                            <button type="button" class="btn-icon toggle-password" data-target="input-stream-key" title="Toggle visibility">
-                                <svg class="icon eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                    <circle cx="12" cy="12" r="3"/>
-                                </svg>
-                            </button>
-                        </div>
-                        <span class="help-text">Obtain from YouTube Studio &gt; Stream Settings &gt; Stream Key.</span>
-                    </div>
-
-                    <!-- Form Action Buttons -->
-                    <div class="button-group">
-                        <button type="button" id="btn-start" class="btn btn-primary">
-                            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
-                                <polygon points="5 3 19 12 5 21 5 3"/>
-                            </svg>
-                            <span>Start Live Stream</span>
-                        </button>
-                        <button type="button" id="btn-stop" class="btn btn-danger" disabled>
-                            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
-                                <rect x="6" y="6" width="12" height="12" rx="1"/>
-                            </svg>
-                            <span>Stop Stream</span>
+                            Auto-Save Credentials
                         </button>
                     </div>
-                </form>
-            </section>
+
+                    <form id="stream-form" onsubmit="return false;">
+                        <!-- API Token Input -->
+                        <div class="form-group">
+                            <label for="input-token">
+                                <span>API Security Token</span>
+                                <span class="badge-optional">Required</span>
+                            </label>
+                            <div class="input-wrapper">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                                </svg>
+                                <input type="password" id="input-token" placeholder="Enter API_TOKEN set in .env" required autocomplete="current-password">
+                                <button type="button" class="btn-icon toggle-password" data-target="input-token" title="Toggle visibility">
+                                    <svg class="icon eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span class="help-text">Must match `API_TOKEN` configured on server `.env`.</span>
+                        </div>
+
+                        <!-- Video Source URL Input -->
+                        <div class="form-group">
+                            <label for="input-video-url">
+                                <span>Video Source URL</span>
+                                <span class="badge-info">Direct HTTP / S3 / MP4 / HLS</span>
+                            </label>
+                            <div class="input-wrapper">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                                </svg>
+                                <input type="url" id="input-video-url" placeholder="https://my-bucket.s3.amazonaws.com/video.mp4" required>
+                            </div>
+                            <div class="sample-links">
+                                <span>Samples:</span>
+                                <button type="button" class="btn-chip" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny</button>
+                                <button type="button" class="btn-chip" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4">Tears of Steel</button>
+                            </div>
+                        </div>
+
+                        <!-- YouTube Stream Key Input -->
+                        <div class="form-group">
+                            <label for="input-stream-key">
+                                <span>YouTube Stream Key</span>
+                                <span class="badge-optional">Secret</span>
+                            </label>
+                            <div class="input-wrapper">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 2l-2 2m-2 2l-2 2m2-2l2 2m-7 1a5 5 0 1 1-7.5-6.5 5 5 0 0 1 6.5 7.5z"/>
+                                    <path d="M15 9l-4 4"/>
+                                </svg>
+                                <input type="password" id="input-stream-key" placeholder="xxxx-xxxx-xxxx-xxxx-xxxx" required autocomplete="off">
+                                <button type="button" class="btn-icon toggle-password" data-target="input-stream-key" title="Toggle visibility">
+                                    <svg class="icon eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span class="help-text">Obtain from YouTube Studio &gt; Stream Settings &gt; Stream Key.</span>
+                        </div>
+
+                        <!-- Form Action Buttons -->
+                        <div class="button-group">
+                            <button type="button" id="btn-start" class="btn btn-primary">
+                                <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+                                    <polygon points="5 3 19 12 5 21 5 3"/>
+                                </svg>
+                                <span>Start Live Stream</span>
+                            </button>
+                            <button type="button" id="btn-stop" class="btn btn-danger" disabled>
+                                <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+                                    <rect x="6" y="6" width="12" height="12" rx="1"/>
+                                </svg>
+                                <span>Stop Stream</span>
+                            </button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- AWS S3 Video Uploader Card -->
+                <section class="card s3-card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                            <h2>AWS S3 Video Uploader</h2>
+                        </div>
+                        <span class="badge-info">Direct S3 Bucket</span>
+                    </div>
+
+                    <div class="upload-dropzone" id="s3-dropzone">
+                        <input type="file" id="s3-file-input" accept="video/mp4,video/mkv,video/mov,video/webm,video/x-matroska,video/x-flv" hidden>
+                        <div class="dropzone-content">
+                            <div class="dropzone-icon">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/>
+                                    <path d="M12 12v9"/>
+                                    <path d="m16 16-4-4-4 4"/>
+                                </svg>
+                            </div>
+                            <p class="dropzone-text">Drag & drop your video file here, or <button type="button" class="btn-text highlight" id="btn-browse-file">Browse File</button></p>
+                            <span class="dropzone-hint">Supports MP4, MKV, MOV, WEBM (Up to 5 GB)</span>
+                        </div>
+                    </div>
+
+                    <!-- Selected File Preview Bar -->
+                    <div class="file-preview-bar hidden" id="file-preview-bar">
+                        <div class="file-details">
+                            <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                                <polygon points="10 11 15 14 10 17 10 11"/>
+                            </svg>
+                            <div class="file-info">
+                                <span class="file-name" id="s3-file-name">filename.mp4</span>
+                                <span class="file-size" id="s3-file-size">0.00 MB</span>
+                            </div>
+                        </div>
+                        <button type="button" class="btn-chip btn-danger-chip" id="btn-remove-file">Clear</button>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="upload-progress-container hidden" id="upload-progress-container">
+                        <div class="progress-labels">
+                            <span id="upload-status-text">Uploading to S3...</span>
+                            <span id="upload-percentage">0%</span>
+                        </div>
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill" id="upload-progress-bar"></div>
+                        </div>
+                    </div>
+
+                    <div class="upload-actions">
+                        <button type="button" id="btn-upload-s3" class="btn btn-secondary w-full" disabled>
+                            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                            <span>Upload File to S3</span>
+                        </button>
+                    </div>
+
+                    <!-- S3 Result Box -->
+                    <div class="s3-result-card hidden" id="s3-result-card">
+                        <div class="s3-result-header">
+                            <svg class="icon success-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                <polyline points="22 4 12 14.01 9 11.01"/>
+                            </svg>
+                            <span>Uploaded to AWS S3</span>
+                        </div>
+                        <div class="s3-url-box">
+                            <input type="text" id="s3-result-url" readonly>
+                            <button type="button" class="btn-chip" id="btn-copy-s3-url" title="Copy URL">Copy</button>
+                        </div>
+                        <button type="button" class="btn btn-accent btn-sm w-full" id="btn-use-s3-url">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M5 12h14M12 5l7 7-7 7"/>
+                            </svg>
+                            Set as Stream Source URL
+                        </button>
+                    </div>
+                </section>
+            </div>
 
             <!-- Right Column: Status Dashboard & Diagnostics -->
             <div class="right-column">

@@ -301,6 +301,201 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // -------------------------------------------------------------------------
+    // AWS S3 File Upload System
+    // -------------------------------------------------------------------------
+    const s3Dropzone = document.getElementById("s3-dropzone");
+    const s3FileInput = document.getElementById("s3-file-input");
+    const btnBrowseFile = document.getElementById("btn-browse-file");
+    const filePreviewBar = document.getElementById("file-preview-bar");
+    const s3FileName = document.getElementById("s3-file-name");
+    const s3FileSize = document.getElementById("s3-file-size");
+    const btnRemoveFile = document.getElementById("btn-remove-file");
+    const btnUploadS3 = document.getElementById("btn-upload-s3");
+
+    const uploadProgressContainer = document.getElementById("upload-progress-container");
+    const uploadStatusText = document.getElementById("upload-status-text");
+    const uploadPercentage = document.getElementById("upload-percentage");
+    const uploadProgressBar = document.getElementById("upload-progress-bar");
+
+    const s3ResultCard = document.getElementById("s3-result-card");
+    const s3ResultUrl = document.getElementById("s3-result-url");
+    const btnCopyS3Url = document.getElementById("btn-copy-s3-url");
+    const btnUseS3Url = document.getElementById("btn-use-s3-url");
+
+    let selectedVideoFile = null;
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return "0 Bytes";
+        const k = 1024;
+        const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+    }
+
+    function handleFileSelection(file) {
+        if (!file) return;
+
+        // Check if file is a video
+        if (!file.type.startsWith("video/") && !/\.(mp4|mkv|mov|flv|webm|ts)$/i.test(file.name)) {
+            alert("Please select a valid video file (.mp4, .mkv, .mov, .webm).");
+            return;
+        }
+
+        const formattedSize = formatBytes(file.size);
+        selectedVideoFile = file;
+        s3FileName.textContent = file.name;
+        s3FileSize.textContent = formattedSize;
+
+        filePreviewBar.classList.remove("hidden");
+        btnUploadS3.disabled = false;
+        s3ResultCard.classList.add("hidden");
+        uploadProgressContainer.classList.add("hidden");
+
+        log(`Selected video for S3 upload: ${file.name} (${formattedSize})`, "info");
+    }
+
+    function resetFileSelection() {
+        selectedVideoFile = null;
+        s3FileInput.value = "";
+        filePreviewBar.classList.add("hidden");
+        btnUploadS3.disabled = true;
+        uploadProgressContainer.classList.add("hidden");
+    }
+
+    btnBrowseFile?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        s3FileInput.click();
+    });
+
+    s3Dropzone?.addEventListener("click", () => {
+        s3FileInput.click();
+    });
+
+    s3FileInput?.addEventListener("change", (e) => {
+        if (e.target.files && e.target.files[0]) {
+            handleFileSelection(e.target.files[0]);
+        }
+    });
+
+    // Drag and drop handlers
+    ["dragenter", "dragover"].forEach(eventName => {
+        s3Dropzone?.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            s3Dropzone.classList.add("dragover");
+        });
+    });
+
+    ["dragleave", "drop"].forEach(eventName => {
+        s3Dropzone?.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            s3Dropzone.classList.remove("dragover");
+        });
+    });
+
+    s3Dropzone?.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        if (dt.files && dt.files[0]) {
+            handleFileSelection(dt.files[0]);
+        }
+    });
+
+    btnRemoveFile?.addEventListener("click", resetFileSelection);
+
+    // Upload to AWS S3 via XHR (supports progress tracking)
+    btnUploadS3?.addEventListener("click", () => {
+        if (!selectedVideoFile) return;
+
+        const token = inputToken.value.trim();
+        if (!token) {
+            alert("Please enter your API Security Token first.");
+            inputToken.focus();
+            return;
+        }
+
+        btnUploadS3.disabled = true;
+        uploadProgressContainer.classList.remove("hidden");
+        uploadProgressBar.style.width = "0%";
+        uploadPercentage.textContent = "0%";
+        uploadStatusText.textContent = "Uploading to S3...";
+
+        log(`Starting upload of ${selectedVideoFile.name} to AWS S3...`, "info");
+
+        const formData = new FormData();
+        formData.append("token", token);
+        formData.append("videoFile", selectedVideoFile);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/upload-s3", true);
+
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                uploadProgressBar.style.width = `${percent}%`;
+                uploadPercentage.textContent = `${percent}%`;
+                uploadStatusText.textContent = percent === 100 ? "Processing on S3..." : `Uploading (${percent}%)...`;
+            }
+        };
+
+        xhr.onload = () => {
+            let response;
+            try {
+                response = JSON.parse(xhr.responseText);
+            } catch (err) {
+                const cleanMsg = xhr.responseText.replace(/<[^>]*>/g, '').trim().slice(0, 150);
+                const errorStr = cleanMsg || `Server returned non-JSON response (HTTP ${xhr.status})`;
+                log(`S3 upload error (HTTP ${xhr.status}): ${errorStr}`, "error");
+                alert(`S3 Upload Error (HTTP ${xhr.status}): ${errorStr}`);
+                btnUploadS3.disabled = false;
+                return;
+            }
+
+            if (xhr.status === 200 && response.success) {
+                uploadProgressBar.style.width = "100%";
+                uploadPercentage.textContent = "100%";
+                uploadStatusText.textContent = "Upload complete!";
+
+                s3ResultUrl.value = response.url;
+                s3ResultCard.classList.remove("hidden");
+
+                log(`File successfully uploaded to AWS S3: ${response.url}`, "success");
+            } else {
+                log(`S3 upload failed: ${response.message || "Server error"}`, "error");
+                alert(`S3 Upload Failed: ${response.message || "Check server logs for details."}`);
+                btnUploadS3.disabled = false;
+            }
+        };
+
+        xhr.onerror = () => {
+            log("Network error during S3 upload.", "error");
+            alert("Network error while uploading to S3.");
+            btnUploadS3.disabled = false;
+        };
+
+        xhr.send(formData);
+    });
+
+    // Copy S3 URL
+    btnCopyS3Url?.addEventListener("click", () => {
+        if (!s3ResultUrl.value) return;
+        navigator.clipboard.writeText(s3ResultUrl.value);
+        btnCopyS3Url.textContent = "Copied!";
+        setTimeout(() => { btnCopyS3Url.textContent = "Copy"; }, 2000);
+        log("Copied S3 video URL to clipboard", "info");
+    });
+
+    // Set as Stream Source URL
+    btnUseS3Url?.addEventListener("click", () => {
+        if (!s3ResultUrl.value) return;
+        inputVideoUrl.value = s3ResultUrl.value;
+        log("Set S3 video URL as stream source", "success");
+
+        // Scroll smoothly to Stream Configuration
+        document.querySelector(".control-card")?.scrollIntoView({ behavior: "smooth" });
+    });
+
     // Clear Logs Button
     btnClearLogs?.addEventListener("click", () => {
         consoleLogs.innerHTML = "";

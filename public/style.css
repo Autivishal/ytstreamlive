@@ -600,6 +600,234 @@ body {
     border-radius: 3px;
 }
 
+/* Left Column Container */
+.left-column {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+/* AWS S3 Uploader Card & Dropzone */
+.s3-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.upload-dropzone {
+    border: 2px dashed rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
+    padding: 24px 16px;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.upload-dropzone:hover, .upload-dropzone.dragover {
+    border-color: var(--accent-red);
+    background: rgba(255, 0, 85, 0.05);
+}
+
+.dropzone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.dropzone-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(255, 0, 85, 0.1);
+    color: var(--accent-red);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dropzone-text {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.btn-text.highlight {
+    color: var(--accent-red);
+    font-weight: 600;
+    text-decoration: underline;
+}
+
+.dropzone-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Selected File Bar */
+.file-preview-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.file-details {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.file-icon {
+    width: 24px;
+    height: 24px;
+    color: #60a5fa;
+    flex-shrink: 0;
+}
+
+.file-info {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.file-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-size {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.btn-danger-chip {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+}
+
+.btn-danger-chip:hover {
+    background: rgba(239, 68, 68, 0.3);
+    color: #fff;
+}
+
+/* Upload Progress Bar */
+.upload-progress-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.progress-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.progress-bar-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #ff0055, #3b82f6);
+    border-radius: var(--radius-full);
+    transition: width 0.2s ease;
+}
+
+/* S3 Result Box */
+.s3-result-card {
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(10, 175, 120, 0.3);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.s3-result-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #34d399;
+}
+
+.s3-result-header .success-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.s3-url-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.s3-url-box input {
+    width: 100%;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: #a7f3d0;
+    font-family: var(--font-code);
+    font-size: 12px;
+    outline: none;
+}
+
+.btn-secondary {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: #60a5fa;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: rgba(59, 130, 246, 0.25);
+    border-color: #3b82f6;
+    color: #fff;
+}
+
+.btn-accent {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    font-weight: 600;
+}
+
+.btn-accent:hover:not(:disabled) {
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+}
+
+.btn-sm {
+    padding: 10px 14px;
+    font-size: 13px;
+}
+
+.w-full {
+    width: 100%;
+}
+
+.hidden {
+    display: none !important;
+}
+
 /* Footer */
 .app-footer {
     text-align: center;
