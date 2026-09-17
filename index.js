@@ -308,31 +308,55 @@ app.post("/start-stream", async (req, res) => {
         });
     }
 
+    if (!streamKey || streamKey.trim().length < 5) {
+        console.warn("[START STREAM] Request rejected: YouTube Stream Key is missing or invalid.");
+        return res.status(400).json({
+            success: false,
+            message: "Invalid YouTube Stream Key. Please enter a valid stream key from YouTube Studio."
+        });
+    }
+
     const resolvedUrl = await resolveStreamableUrl(videoUrl);
-    console.log(`[START STREAM] Starting FFmpeg process for video: ${resolvedUrl}`);
+    const maskedKey = streamKey.length > 8 ? streamKey.substring(0, 4) + "..." + streamKey.substring(streamKey.length - 4) : "****";
+    console.log(`[START STREAM] Starting FFmpeg live stream loop...`);
+    console.log(`[START STREAM] Input Source: ${resolvedUrl.substring(0, 100)}...`);
+    console.log(`[START STREAM] Target RTMP: rtmp://a.rtmp.youtube.com/live2/${maskedKey}`);
+    
     streamStartTime = Date.now();
 
     ffmpegProcess = spawn(ffmpegPath, [
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
         "-re",
         "-stream_loop", "-1",
         "-i", resolvedUrl,
         "-c:v", "libx264",
         "-preset", "veryfast",
+        "-maxrate", "3000k",
+        "-bufsize", "6000k",
+        "-pix_fmt", "yuv420p",
+        "-g", "60",
         "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
         "-f", "flv",
-        `rtmp://a.rtmp.youtube.com/live2/${streamKey}`
+        `rtmp://a.rtmp.youtube.com/live2/${streamKey.trim()}`
     ]);
 
     ffmpegProcess.stderr.on("data", data => {
-        console.log(`[FFmpeg STDERR] ${data.toString().trim()}`);
+        const line = data.toString().trim();
+        if (line) {
+            console.log(`[FFmpeg STDERR] ${line}`);
+        }
     });
 
     ffmpegProcess.on("error", err => {
-        console.error("[FFmpeg ERROR]", err);
+        console.error("[FFmpeg PROCESS ERROR]", err);
     });
 
-    ffmpegProcess.on("close", code => {
-        console.log(`[FFmpeg EXIT] Process exited with code ${code}`);
+    ffmpegProcess.on("close", (code, signal) => {
+        console.log(`[FFmpeg EXIT] Process exited with code ${code}, signal: ${signal}`);
         ffmpegProcess = null;
         streamStartTime = null;
     });
