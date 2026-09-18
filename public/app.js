@@ -28,6 +28,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let isStreamRunning = false;
     let localTimerInterval = null;
     let currentUptimeSeconds = 0;
+    let currentTabStreamId = sessionStorage.getItem("ytlive_tab_stream_id") || null;
 
     // Set server origin in console header
     if (logOrigin) {
@@ -281,6 +282,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
+                if (data.streamId) {
+                    currentTabStreamId = data.streamId;
+                    sessionStorage.setItem("ytlive_tab_stream_id", currentTabStreamId);
+                }
                 log(`Stream launched successfully! (${data.maskedKey})`, "success");
                 checkHealth();
             } else {
@@ -319,6 +324,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
+                if (streamId === currentTabStreamId) {
+                    currentTabStreamId = null;
+                    sessionStorage.removeItem("ytlive_tab_stream_id");
+                }
                 log(`Stream stopped successfully: ${data.message}`, "success");
                 checkHealth();
             } else {
@@ -330,10 +339,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------------------
-    // API Call: Stop All Streams
+    // API Call: Stop Stream (Targeted to tab stream or entered Stream Key)
     // -------------------------------------------------------------------------
     btnStop?.addEventListener("click", async () => {
         const token = inputToken.value.trim();
+        const streamKey = inputStreamKey.value.trim();
 
         if (!token) {
             alert("Please enter your API Security Token to stop streams.");
@@ -341,30 +351,50 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        if (!confirm("Are you sure you want to stop ALL active live streams?")) {
+        const payload = { token };
+        let confirmText = "";
+
+        if (streamKey) {
+            payload.streamKey = streamKey;
+            const maskedKey = streamKey.length > 8 
+                ? streamKey.substring(0, 4) + "..." + streamKey.substring(streamKey.length - 4) 
+                : "****";
+            confirmText = `Are you sure you want to stop the live stream matching Stream Key (${maskedKey})?`;
+        } else if (currentTabStreamId) {
+            payload.streamId = currentTabStreamId;
+            confirmText = "Are you sure you want to stop the live stream started in this tab/window?";
+        } else {
+            confirmText = "Are you sure you want to stop the active live stream?";
+        }
+
+        if (!confirm(confirmText)) {
             return;
         }
 
         btnStop.disabled = true;
-        log("Sending stop command for ALL active streams...", "warning");
+        log("Sending stop stream command...", "warning");
 
         try {
             const response = await fetch("/stop-stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token })
+                body: JSON.stringify(payload)
             });
 
             const data = await response.json();
 
             if (response.ok && data.success) {
-                log(`All streams stopped: ${data.message}`, "success");
+                if (payload.streamId === currentTabStreamId) {
+                    currentTabStreamId = null;
+                    sessionStorage.removeItem("ytlive_tab_stream_id");
+                }
+                log(`Stream stopped: ${data.message}`, "success");
                 checkHealth();
             } else {
-                log(`Stop streams failed: ${data.message || response.statusText}`, "error");
+                log(`Stop stream failed: ${data.message || response.statusText}`, "error");
             }
         } catch (err) {
-            log(`Network error stopping streams: ${err.message}`, "error");
+            log(`Network error stopping stream: ${err.message}`, "error");
         } finally {
             btnStop.disabled = false;
         }

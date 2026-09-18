@@ -572,11 +572,11 @@ app.post("/start-stream", async (req, res) => {
 });
 
 app.post("/stop-stream", (req, res) => {
-    const { token, streamId } = req.body;
+    const { token, streamId, streamKey, stopAll } = req.body;
     const expectedToken = getExpectedToken();
     const receivedToken = (token || "").trim();
 
-    console.log(`[${new Date().toISOString()}] POST /stop-stream received (Target streamId: ${streamId || "ALL"}).`);
+    console.log(`[${new Date().toISOString()}] POST /stop-stream received (streamId: ${streamId || "N/A"}, streamKey: ${streamKey ? "Provided" : "N/A"}).`);
 
     if (receivedToken !== expectedToken) {
         console.warn(`[AUTH FAILED] Stop stream rejected: Invalid token.`);
@@ -586,29 +586,87 @@ app.post("/stop-stream", (req, res) => {
         });
     }
 
-    if (streamId) {
-        const stopped = stopAndRemoveStream(streamId);
-        if (!stopped) {
-            return res.status(404).json({
-                success: false,
-                message: `Stream with ID '${streamId}' was not found or is not active.`
-            });
+    // Explicit request to stop all streams
+    if (stopAll) {
+        let stoppedCount = 0;
+        for (const sId of Array.from(activeStreams.keys())) {
+            if (stopAndRemoveStream(sId)) stoppedCount++;
         }
         return res.json({
             success: true,
-            message: `Stream '${streamId}' stopped successfully.`
+            message: `Stopped ${stoppedCount} active stream(s).`
         });
     }
 
-    // Stop all active streams if no streamId specified
-    let stoppedCount = 0;
-    for (const sId of Array.from(activeStreams.keys())) {
-        if (stopAndRemoveStream(sId)) stoppedCount++;
+    // 1. Try stopping by streamId if provided
+    if (streamId) {
+        const stopped = stopAndRemoveStream(streamId);
+        if (stopped) {
+            return res.json({
+                success: true,
+                message: `Stream '${streamId}' stopped successfully.`
+            });
+        }
     }
 
-    res.json({
-        success: true,
-        message: `Stopped ${stoppedCount} active stream(s).`
+    // 2. Try stopping by streamKey if provided (or as fallback if streamId not found)
+    if (streamKey) {
+        const cleanKey = streamKey.trim();
+        let targetStreamId = null;
+        let targetMaskedKey = "";
+
+        for (const [sId, sObj] of activeStreams.entries()) {
+            if (sObj.streamKey === cleanKey) {
+                targetStreamId = sId;
+                targetMaskedKey = sObj.maskedKey;
+                break;
+            }
+        }
+
+        if (targetStreamId) {
+            stopAndRemoveStream(targetStreamId);
+            return res.json({
+                success: true,
+                message: `Stream (${targetMaskedKey}) stopped successfully.`
+            });
+        }
+        return res.status(404).json({
+            success: false,
+            message: "No active live stream found matching the provided YouTube Stream Key."
+        });
+    }
+
+    // 3. If streamId was provided but not found and no streamKey provided
+    if (streamId) {
+        return res.status(404).json({
+            success: false,
+            message: `Stream with ID '${streamId}' was not found or is no longer active.`
+        });
+    }
+
+    // 4. If neither streamId nor streamKey was provided:
+    // If exactly 1 stream is currently active, stop that single stream for convenience
+    if (activeStreams.size === 1) {
+        const singleStreamId = Array.from(activeStreams.keys())[0];
+        const singleStreamObj = activeStreams.get(singleStreamId);
+        const maskedKey = singleStreamObj ? singleStreamObj.maskedKey : singleStreamId;
+        stopAndRemoveStream(singleStreamId);
+        return res.json({
+            success: true,
+            message: `Single active stream (${maskedKey}) stopped successfully.`
+        });
+    }
+
+    if (activeStreams.size === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "No active streams are currently running."
+        });
+    }
+
+    return res.status(400).json({
+        success: false,
+        message: "Multiple streams are active. Please specify a YouTube Stream Key or select a specific stream to stop."
     });
 });
 
